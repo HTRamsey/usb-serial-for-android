@@ -74,11 +74,6 @@ public class ChromeCcdSerialDriver implements UsbSerialDriver{
         public UsbSerialDriver getDriver() {
             return ChromeCcdSerialDriver.this;
         }
-
-        @Override
-        public void setParameters(int baudRate, int dataBits, int stopBits, int parity) throws IOException {
-            throw new UnsupportedOperationException();
-        }
     }
 
     public static Map<Integer, int[]> getSupportedDevices() {

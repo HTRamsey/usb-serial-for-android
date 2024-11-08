@@ -300,7 +300,7 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
     }
 
     @Override
-    public abstract void setParameters(int baudRate, int dataBits, int stopBits, @Parity int parity) throws IOException;
+    public void setParameters(int baudRate, int dataBits, int stopBits, @Parity int parity) throws IOException { throw new UnsupportedOperationException(); }
 
     @Override
     public boolean getCD() throws IOException { throw new UnsupportedOperationException(); }

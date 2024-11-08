@@ -84,11 +84,6 @@ public class GsmModemSerialDriver implements UsbSerialDriver{
             return GsmModemSerialDriver.this;
         }
 
-        @Override
-        public void setParameters(int baudRate, int dataBits, int stopBits, int parity) throws IOException {
-            throw new UnsupportedOperationException();
-        }
-
     }
 
     public static Map<Integer, int[]> getSupportedDevices() {

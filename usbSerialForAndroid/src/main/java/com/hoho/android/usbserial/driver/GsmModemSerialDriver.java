@@ -15,7 +15,7 @@ import java.util.Map;
 
 public class GsmModemSerialDriver implements UsbSerialDriver{
 
-    private final String TAG = GsmModemSerialDriver.class.getSimpleName();
+    private static final String TAG = GsmModemSerialDriver.class.getSimpleName();
 
     private final UsbDevice mDevice;
     private final UsbSerialPort mPort;
@@ -70,13 +70,12 @@ public class GsmModemSerialDriver implements UsbSerialDriver{
 
         }
 
-        private int initGsmModem() throws IOException {
+        private void initGsmModem() throws IOException {
             int len = mConnection.controlTransfer(
                     0x21, 0x22, 0x01, 0, null, 0, 5000);
             if(len < 0) {
                 throw new IOException("init failed");
             }
-            return len;
         }
 
         @Override

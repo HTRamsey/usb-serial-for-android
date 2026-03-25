@@ -48,7 +48,7 @@ public class SerialInputOutputManager {
 
     private int mThreadPriority = Process.THREAD_PRIORITY_URGENT_AUDIO;
     private final AtomicReference<State> mState = new AtomicReference<>(State.STOPPED);
-    private CountDownLatch mStartuplatch = new CountDownLatch(2);
+    private volatile CountDownLatch mStartuplatch = new CountDownLatch(2);
     private Listener mListener; // Synchronized by 'this'
     private final UsbSerialPort mSerialPort;
 
@@ -184,6 +184,10 @@ public class SerialInputOutputManager {
                 mState.set(State.RUNNING);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                mState.set(State.STOPPING);
+                synchronized (mWriteBufferLock) {
+                    mWriteBufferLock.notifyAll();
+                }
             }
         } else {
             throw new IllegalStateException("already started");
@@ -197,9 +201,10 @@ public class SerialInputOutputManager {
      * interrupt blocking read
      */
     public void stop() {
-        if(mState.compareAndSet(State.RUNNING, State.STOPPING)) {
+        if(mState.compareAndSet(State.RUNNING, State.STOPPING)
+                || mState.compareAndSet(State.STARTING, State.STOPPING)) {
             synchronized (mWriteBufferLock) {
-                mWriteBufferLock.notifyAll(); // wake up write thread to check the stop condition
+                mWriteBufferLock.notifyAll();
             }
             Log.i(TAG, "Stop requested");
         }

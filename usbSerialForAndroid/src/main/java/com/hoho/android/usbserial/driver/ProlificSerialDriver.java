@@ -27,7 +27,7 @@ import java.util.Map;
 
 public class ProlificSerialDriver implements UsbSerialDriver {
 
-    private final String TAG = ProlificSerialDriver.class.getSimpleName();
+    private static final String TAG = ProlificSerialDriver.class.getSimpleName();
 
     private final static int[] standardBaudRates = {
             75, 150, 300, 600, 1200, 1800, 2400, 3600, 4800, 7200, 9600, 14400, 19200,
@@ -121,8 +121,8 @@ public class ProlificSerialDriver implements UsbSerialDriver {
         private int mStatus = 0;
         private volatile Thread mReadStatusThread = null;
         private final Object mReadStatusThreadLock = new Object();
-        private boolean mStopReadStatusThread = false;
-        private Exception mReadStatusException = null;
+        private volatile boolean mStopReadStatusThread = false;
+        private volatile Exception mReadStatusException = null;
 
 
         public ProlificSerialPort(UsbDevice device, int portNumber) {
@@ -252,7 +252,7 @@ public class ProlificSerialDriver implements UsbSerialDriver {
 
             /* throw and clear an exception which occurred in the status read thread */
             Exception readStatusException = mReadStatusException;
-            if (mReadStatusException != null) {
+            if (readStatusException != null) {
                 mReadStatusException = null;
                 throw new IOException(readStatusException);
             }
@@ -294,8 +294,8 @@ public class ProlificSerialDriver implements UsbSerialDriver {
             if(rawDescriptors == null || rawDescriptors.length < 14) {
                 throw new IOException("Could not get device descriptors");
             }
-            int usbVersion = (rawDescriptors[3] << 8) + rawDescriptors[2];
-            int deviceVersion = (rawDescriptors[13] << 8) + rawDescriptors[12];
+            int usbVersion = ((rawDescriptors[3] & 0xFF) << 8) | (rawDescriptors[2] & 0xFF);
+            int deviceVersion = ((rawDescriptors[13] & 0xFF) << 8) | (rawDescriptors[12] & 0xFF);
             byte maxPacketSize0 = rawDescriptors[7];
             if (mDevice.getDeviceClass() == 0x02 || maxPacketSize0 != 64) {
                 mDeviceType = DeviceType.DEVICE_TYPE_01;
@@ -376,7 +376,7 @@ public class ProlificSerialDriver implements UsbSerialDriver {
             baseline = 12000000 * 32;
             mantissa = baseline / baudRate;
             if (mantissa == 0) { // > unrealistic 384 MBaud
-                throw new UnsupportedOperationException("Baud rate to high");
+                throw new UnsupportedOperationException("Baud rate too high");
             }
             exponent = 0;
             if (mDeviceType == DeviceType.DEVICE_TYPE_T) {
@@ -385,7 +385,7 @@ public class ProlificSerialDriver implements UsbSerialDriver {
                         mantissa >>= 1;    /* divide by 2 */
                         exponent++;
                     } else { // < 7 baud
-                        throw new UnsupportedOperationException("Baud rate to low");
+                        throw new UnsupportedOperationException("Baud rate too low");
                     }
                 }
                 buf = mantissa + ((exponent & ~1) << 12) + ((exponent & 1) << 16) + (1 << 31);
@@ -396,7 +396,7 @@ public class ProlificSerialDriver implements UsbSerialDriver {
                         mantissa >>= 2;    /* divide by 4 */
                         exponent++;
                     } else { // < 45.8 baud
-                        throw new UnsupportedOperationException("Baud rate to low");
+                        throw new UnsupportedOperationException("Baud rate too low");
                     }
                 }
                 buf = mantissa + (exponent << 9) + (1 << 31);
@@ -582,15 +582,15 @@ public class ProlificSerialDriver implements UsbSerialDriver {
         public void purgeHwBuffers(boolean purgeWriteBuffers, boolean purgeReadBuffers) throws IOException {
             if (mDeviceType == DeviceType.DEVICE_TYPE_HXN) {
                 int index = 0;
-                if(purgeWriteBuffers) index |= RESET_HXN_RX_PIPE;
-                if(purgeReadBuffers) index |= RESET_HXN_TX_PIPE;
+                if(purgeWriteBuffers) index |= RESET_HXN_TX_PIPE;
+                if(purgeReadBuffers) index |= RESET_HXN_RX_PIPE;
                 if(index != 0)
                     vendorOut(RESET_HXN_REQUEST, index, null);
             } else {
                 if (purgeWriteBuffers)
-                    vendorOut(FLUSH_RX_REQUEST, 0, null);
-                if (purgeReadBuffers)
                     vendorOut(FLUSH_TX_REQUEST, 0, null);
+                if (purgeReadBuffers)
+                    vendorOut(FLUSH_RX_REQUEST, 0, null);
             }
         }
 

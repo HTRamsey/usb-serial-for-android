@@ -64,10 +64,10 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
 
         private static final int USB_TIMEOUT_MILLIS = 5000;
 
-        private final int DEFAULT_BAUD_RATE = 9600;
+        private static final int DEFAULT_BAUD_RATE = 9600;
 
-        private boolean dtr = false;
-        private boolean rts = false;
+        private volatile boolean dtr = false;
+        private volatile boolean rts = false;
 
         public Ch340SerialPort(UsbDevice device, int portNumber) {
             super(device, portNumber);

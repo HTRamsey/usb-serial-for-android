@@ -97,8 +97,8 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
         private static final int STATUS_CD = 0x80;
 
 
-        private boolean dtr = false;
-        private boolean rts = false;
+        private volatile boolean dtr = false;
+        private volatile boolean rts = false;
 
         // second port of Cp2105 has limited baudRate, dataBits, stopBits, parity
         // unsupported baudrate returns error at controlTransfer(), other parameters are silently ignored

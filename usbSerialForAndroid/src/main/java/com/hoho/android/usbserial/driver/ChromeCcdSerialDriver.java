@@ -16,7 +16,7 @@ import java.util.ArrayList;
 
 public class ChromeCcdSerialDriver implements UsbSerialDriver{
 
-    private final String TAG = ChromeCcdSerialDriver.class.getSimpleName();
+    private static final String TAG = ChromeCcdSerialDriver.class.getSimpleName();
 
     private final UsbDevice mDevice;
     private final List<UsbSerialPort> mPorts;
@@ -34,7 +34,7 @@ public class ChromeCcdSerialDriver implements UsbSerialDriver{
     public ChromeCcdSerialDriver(UsbDevice mDevice) {
         this.mDevice = mDevice;
         mPorts = new ArrayList<UsbSerialPort>();
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < mDevice.getInterfaceCount(); i++)
             mPorts.add(new ChromeCcdSerialPort(mDevice, i));
     }
 

@@ -13,7 +13,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public class GsmModemSerialDriver implements UsbSerialDriver{
+public class GsmModemSerialDriver implements UsbSerialDriver {
+
+    public static final UsbSerialDriver.Factory FACTORY = new GsmModemFactory();
 
     private static final String TAG = GsmModemSerialDriver.class.getSimpleName();
 
@@ -66,16 +68,13 @@ public class GsmModemSerialDriver implements UsbSerialDriver{
         protected void closeInt() {
             try {
                 mConnection.releaseInterface(mDataInterface);
-            } catch(Exception ignored) {}
-
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interface", e);
+            }
         }
 
         private void initGsmModem() throws IOException {
-            int len = mConnection.controlTransfer(
-                    0x21, 0x22, 0x01, 0, null, 0, 5000);
-            if(len < 0) {
-                throw new IOException("init failed");
-            }
+            controlTransferOut(0x21, 0x22, 0x01, 0, null, 5000);
         }
 
         @Override
@@ -90,12 +89,20 @@ public class GsmModemSerialDriver implements UsbSerialDriver{
 
     }
 
-    public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
-        supportedDevices.put(UsbId.VENDOR_UNISOC, new int[]{
-                UsbId.FIBOCOM_L610,
-                UsbId.FIBOCOM_L612,
-        });
-        return supportedDevices;
+    static class GsmModemFactory implements UsbSerialDriver.Factory {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new GsmModemSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
+            supportedDevices.put(UsbId.VENDOR_UNISOC, new int[]{
+                    UsbId.FIBOCOM_L610,
+                    UsbId.FIBOCOM_L612,
+            });
+            return supportedDevices;
+        }
     }
 }

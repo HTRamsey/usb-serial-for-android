@@ -14,7 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 
-public class ChromeCcdSerialDriver implements UsbSerialDriver{
+public class ChromeCcdSerialDriver implements UsbSerialDriver {
+
+    public static final UsbSerialDriver.Factory FACTORY = new ChromeCcdFactory();
 
     private static final String TAG = ChromeCcdSerialDriver.class.getSimpleName();
 
@@ -67,7 +69,9 @@ public class ChromeCcdSerialDriver implements UsbSerialDriver{
         protected void closeInt() {
             try {
                 mConnection.releaseInterface(mDataInterface);
-            } catch(Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interface", e);
+            }
         }
 
         @Override
@@ -81,11 +85,19 @@ public class ChromeCcdSerialDriver implements UsbSerialDriver{
         }
     }
 
-    public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
-        supportedDevices.put(UsbId.VENDOR_GOOGLE, new int[]{
-                UsbId.GOOGLE_CR50,
-        });
-        return supportedDevices;
+    static class ChromeCcdFactory implements UsbSerialDriver.Factory {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new ChromeCcdSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
+            supportedDevices.put(UsbId.VENDOR_GOOGLE, new int[]{
+                    UsbId.GOOGLE_CR50,
+            });
+            return supportedDevices;
+        }
     }
 }

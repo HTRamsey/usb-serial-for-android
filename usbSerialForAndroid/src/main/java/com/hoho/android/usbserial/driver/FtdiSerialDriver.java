@@ -31,6 +31,8 @@ import java.util.Map;
 
 public class FtdiSerialDriver implements UsbSerialDriver {
 
+    public static final UsbSerialDriver.Factory FACTORY = new FtdiFactory();
+
     private static final String TAG = FtdiSerialPort.class.getSimpleName();
 
     private final UsbDevice mDevice;
@@ -98,6 +100,14 @@ public class FtdiSerialDriver implements UsbSerialDriver {
         }
 
 
+        private void ftdiControlOut(int request, int value) throws IOException {
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, request, value, mPortNumber + 1, null, USB_WRITE_TIMEOUT_MILLIS);
+        }
+
+        private byte[] ftdiControlIn(int request, int length) throws IOException {
+            return controlTransferIn(REQTYPE_DEVICE_TO_HOST, request, 0, mPortNumber + 1, length, USB_WRITE_TIMEOUT_MILLIS);
+        }
+
         @Override
         protected void openInt() throws IOException {
             if (!mConnection.claimInterface(mDevice.getInterface(mPortNumber), true)) {
@@ -109,18 +119,10 @@ public class FtdiSerialDriver implements UsbSerialDriver {
             mReadEndpoint = mDevice.getInterface(mPortNumber).getEndpoint(0);
             mWriteEndpoint = mDevice.getInterface(mPortNumber).getEndpoint(1);
 
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, RESET_REQUEST,
-                    RESET_ALL, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Reset failed: result=" + result);
-            }
-            result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, MODEM_CONTROL_REQUEST,
+            ftdiControlOut(RESET_REQUEST, RESET_ALL);
+            ftdiControlOut(MODEM_CONTROL_REQUEST,
                     (dtr ? MODEM_CONTROL_DTR_ENABLE : MODEM_CONTROL_DTR_DISABLE) |
-                            (rts ? MODEM_CONTROL_RTS_ENABLE : MODEM_CONTROL_RTS_DISABLE),
-                    mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Init RTS,DTR failed: result=" + result);
-            }
+                            (rts ? MODEM_CONTROL_RTS_ENABLE : MODEM_CONTROL_RTS_DISABLE));
             setFlowControl(mFlowControl);
 
             // mDevice.getVersion() would require API 23
@@ -137,7 +139,9 @@ public class FtdiSerialDriver implements UsbSerialDriver {
         protected void closeInt() {
             try {
                 mConnection.releaseInterface(mDevice.getInterface(mPortNumber));
-            } catch(Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interface", e);
+            }
         }
 
         @Override
@@ -235,11 +239,7 @@ public class FtdiSerialDriver implements UsbSerialDriver {
             Log.d(TAG, String.format("baud rate=%d, effective=%d, error=%.1f%%, value=0x%04x, index=0x%04x, divisor=%d, subdivisor=%d",
                     baudRate, effectiveBaudRate, baudRateError*100, value, index, divisor, subdivisor));
 
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SET_BAUD_RATE_REQUEST,
-                    value, index, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Setting baudrate failed: result=" + result);
-            }
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, SET_BAUD_RATE_REQUEST, value, index, null, USB_WRITE_TIMEOUT_MILLIS);
         }
 
         @Override
@@ -293,21 +293,12 @@ public class FtdiSerialDriver implements UsbSerialDriver {
                     throw new IllegalArgumentException("Invalid stop bits: " + stopBits);
             }
 
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SET_DATA_REQUEST,
-                    config, mPortNumber+1,null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Setting parameters failed: result=" + result);
-            }
+            ftdiControlOut(SET_DATA_REQUEST, config);
             breakConfig = config;
         }
 
         private int getStatus() throws IOException {
-            byte[] data = new byte[2];
-            int result = mConnection.controlTransfer(REQTYPE_DEVICE_TO_HOST, GET_MODEM_STATUS_REQUEST,
-                    0, mPortNumber+1, data, data.length, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != data.length) {
-                throw new IOException("Get modem status failed: result=" + result);
-            }
+            byte[] data = ftdiControlIn(GET_MODEM_STATUS_REQUEST, 2);
             return data[0];
         }
 
@@ -333,11 +324,7 @@ public class FtdiSerialDriver implements UsbSerialDriver {
 
         @Override
         public void setDTR(boolean value) throws IOException {
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, MODEM_CONTROL_REQUEST,
-                    value ? MODEM_CONTROL_DTR_ENABLE : MODEM_CONTROL_DTR_DISABLE, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Set DTR failed: result=" + result);
-            }
+            ftdiControlOut(MODEM_CONTROL_REQUEST, value ? MODEM_CONTROL_DTR_ENABLE : MODEM_CONTROL_DTR_DISABLE);
             dtr = value;
         }
 
@@ -353,11 +340,7 @@ public class FtdiSerialDriver implements UsbSerialDriver {
 
         @Override
         public void setRTS(boolean value) throws IOException {
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, MODEM_CONTROL_REQUEST,
-                    value ? MODEM_CONTROL_RTS_ENABLE : MODEM_CONTROL_RTS_DISABLE, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Set RTS failed: result=" + result);
-            }
+            ftdiControlOut(MODEM_CONTROL_REQUEST, value ? MODEM_CONTROL_RTS_ENABLE : MODEM_CONTROL_RTS_DISABLE);
             rts = value;
         }
 
@@ -399,10 +382,7 @@ public class FtdiSerialDriver implements UsbSerialDriver {
                 default:
                     throw new UnsupportedOperationException();
             }
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SET_FLOW_CONTROL_REQUEST,
-                    value, index, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0)
-                throw new IOException("Set flow control failed: result=" + result);
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, SET_FLOW_CONTROL_REQUEST, value, index, null, USB_WRITE_TIMEOUT_MILLIS);
             mFlowControl = flowControl;
         }
 
@@ -414,19 +394,10 @@ public class FtdiSerialDriver implements UsbSerialDriver {
         @Override
         public void purgeHwBuffers(boolean purgeWriteBuffers, boolean purgeReadBuffers) throws IOException {
             if (purgeWriteBuffers) {
-                int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, RESET_REQUEST,
-                        RESET_PURGE_TX, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-                if (result != 0) {
-                    throw new IOException("Purge write buffer failed: result=" + result);
-                }
+                ftdiControlOut(RESET_REQUEST, RESET_PURGE_TX);
             }
-
             if (purgeReadBuffers) {
-                int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, RESET_REQUEST,
-                        RESET_PURGE_RX, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-                if (result != 0) {
-                    throw new IOException("Purge read buffer failed: result=" + result);
-                }
+                ftdiControlOut(RESET_REQUEST, RESET_PURGE_RX);
             }
         }
 
@@ -434,45 +405,39 @@ public class FtdiSerialDriver implements UsbSerialDriver {
         public void setBreak(boolean value) throws IOException {
             int config = breakConfig;
             if(value) config |= 0x4000;
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SET_DATA_REQUEST,
-                    config, mPortNumber+1,null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Setting BREAK failed: result=" + result);
-            }
+            ftdiControlOut(SET_DATA_REQUEST, config);
         }
 
         public void setLatencyTimer(int latencyTime) throws IOException {
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SET_LATENCY_TIMER_REQUEST,
-                    latencyTime, mPortNumber+1, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Set latency timer failed: result=" + result);
-            }
+            ftdiControlOut(SET_LATENCY_TIMER_REQUEST, latencyTime);
         }
 
         public int getLatencyTimer() throws IOException {
-            byte[] data = new byte[1];
-            int result = mConnection.controlTransfer(REQTYPE_DEVICE_TO_HOST, GET_LATENCY_TIMER_REQUEST,
-                    0, mPortNumber+1, data, data.length, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != data.length) {
-                throw new IOException("Get latency timer failed: result=" + result);
-            }
+            byte[] data = ftdiControlIn(GET_LATENCY_TIMER_REQUEST, 1);
             return data[0];
         }
 
     }
 
-    @SuppressWarnings({"unused"})
-    public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
-        supportedDevices.put(UsbId.VENDOR_FTDI,
-                new int[] {
-                    UsbId.FTDI_FT232R,
-                    UsbId.FTDI_FT232H,
-                    UsbId.FTDI_FT2232H,
-                    UsbId.FTDI_FT4232H,
-                    UsbId.FTDI_FT231X,  // same ID for FT230X, FT231X, FT234XD
-                });
-        return supportedDevices;
+    static class FtdiFactory implements UsbSerialDriver.Factory {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new FtdiSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
+            supportedDevices.put(UsbId.VENDOR_FTDI,
+                    new int[] {
+                        UsbId.FTDI_FT232R,
+                        UsbId.FTDI_FT232H,
+                        UsbId.FTDI_FT2232H,
+                        UsbId.FTDI_FT4232H,
+                        UsbId.FTDI_FT231X,
+                    });
+            return supportedDevices;
+        }
     }
 
 }

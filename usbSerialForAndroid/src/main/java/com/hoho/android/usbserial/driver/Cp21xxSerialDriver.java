@@ -10,6 +10,7 @@ import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
+import android.util.Log;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -19,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 public class Cp21xxSerialDriver implements UsbSerialDriver {
+
+    public static final UsbSerialDriver.Factory FACTORY = new Cp21xxFactory();
 
     private static final String TAG = Cp21xxSerialDriver.class.getSimpleName();
 
@@ -114,20 +117,12 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
         }
 
         private void setConfigSingle(int request, int value) throws IOException {
-            int result = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, request, value,
-                    mPortNumber, null, 0, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != 0) {
-                throw new IOException("Control transfer failed: " + request + " / " + value + " -> " + result);
-            }
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, request, value, mPortNumber, null, USB_WRITE_TIMEOUT_MILLIS);
         }
 
         private byte getStatus() throws IOException {
-            byte[] buffer = new byte[1];
-            int result = mConnection.controlTransfer(REQTYPE_DEVICE_TO_HOST, SILABSER_GET_MDMSTS_REQUEST_CODE, 0,
-                    mPortNumber, buffer, buffer.length, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != buffer.length) {
-                throw new IOException("Control transfer failed: " + SILABSER_GET_MDMSTS_REQUEST_CODE + " / " + 0 + " -> " + result);
-            }
+            byte[] buffer = controlTransferIn(REQTYPE_DEVICE_TO_HOST, SILABSER_GET_MDMSTS_REQUEST_CODE, 0,
+                    mPortNumber, 1, USB_WRITE_TIMEOUT_MILLIS);
             return buffer[0];
         }
 
@@ -161,10 +156,14 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
         protected void closeInt() {
             try {
                 setConfigSingle(SILABSER_IFC_ENABLE_REQUEST_CODE, UART_DISABLE);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error disabling UART", e);
+            }
             try {
                 mConnection.releaseInterface(mDevice.getInterface(mPortNumber));
-            } catch(Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interface", e);
+            }
         }
 
         private void setBaudRate(int baudRate) throws IOException {
@@ -174,11 +173,8 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
                     (byte) ((baudRate >> 16) & 0xff),
                     (byte) ((baudRate >> 24) & 0xff)
             };
-            int ret = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_BAUDRATE_REQUEST_CODE,
-                    0, mPortNumber, data, 4, USB_WRITE_TIMEOUT_MILLIS);
-            if (ret < 0) {
-                throw new IOException("Error setting baud rate");
-            }
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_BAUDRATE_REQUEST_CODE,
+                    0, mPortNumber, data, USB_WRITE_TIMEOUT_MILLIS);
         }
 
         @Override
@@ -315,12 +311,8 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
 
         @Override
         public boolean getXON() throws IOException {
-            byte[] buffer = new byte[0x13];
-            int result = mConnection.controlTransfer(REQTYPE_DEVICE_TO_HOST, SILABSER_GET_COMM_STATUS_REQUEST_CODE, 0,
-                    mPortNumber, buffer, buffer.length, USB_WRITE_TIMEOUT_MILLIS);
-            if (result != buffer.length) {
-                throw new IOException("Control transfer failed: " + SILABSER_GET_COMM_STATUS_REQUEST_CODE + " -> " + result);
-            }
+            byte[] buffer = controlTransferIn(REQTYPE_DEVICE_TO_HOST, SILABSER_GET_COMM_STATUS_REQUEST_CODE, 0,
+                    mPortNumber, 0x13, USB_WRITE_TIMEOUT_MILLIS);
             return (buffer[4] & 8) == 0;
         }
 
@@ -351,11 +343,8 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
             }
             if(flowControl == FlowControl.XON_XOFF) {
                 byte[] chars = new byte[]{0, 0, 0, 0, CHAR_XON, CHAR_XOFF};
-                int ret = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_CHARS_REQUEST_CODE,
-                        0, mPortNumber, chars, chars.length, USB_WRITE_TIMEOUT_MILLIS);
-                if (ret != chars.length) {
-                    throw new IOException("Error setting XON/XOFF chars");
-                }
+                controlTransferOut(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_CHARS_REQUEST_CODE,
+                        0, mPortNumber, chars, USB_WRITE_TIMEOUT_MILLIS);
                 data[4] |= 0b0000_0011;
                 data[7] |= 0b1000_0000;
                 data[8] = (byte)128;
@@ -364,11 +353,8 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
             if(flowControl == FlowControl.XON_XOFF_INLINE) {
                 throw new UnsupportedOperationException();
             }
-            int ret = mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_FLOW_REQUEST_CODE,
-                    0, mPortNumber, data, data.length, USB_WRITE_TIMEOUT_MILLIS);
-            if (ret != data.length) {
-                throw new IOException("Error setting flow control");
-            }
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, SILABSER_SET_FLOW_REQUEST_CODE,
+                    0, mPortNumber, data, USB_WRITE_TIMEOUT_MILLIS);
             if(flowControl == FlowControl.XON_XOFF) {
                 setXON(true);
             }
@@ -397,16 +383,23 @@ public class Cp21xxSerialDriver implements UsbSerialDriver {
         }
     }
 
-    @SuppressWarnings({"unused"})
-    public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
-        supportedDevices.put(UsbId.VENDOR_SILABS,
-                new int[] {
-            UsbId.SILABS_CP2102, // same ID for CP2101, CP2103, CP2104, CP2109
-            UsbId.SILABS_CP2105,
-            UsbId.SILABS_CP2108,
-        });
-        return supportedDevices;
+    static class Cp21xxFactory implements UsbSerialDriver.Factory {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new Cp21xxSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
+            supportedDevices.put(UsbId.VENDOR_SILABS,
+                    new int[] {
+                UsbId.SILABS_CP2102,
+                UsbId.SILABS_CP2105,
+                UsbId.SILABS_CP2108,
+            });
+            return supportedDevices;
+        }
     }
 
 }

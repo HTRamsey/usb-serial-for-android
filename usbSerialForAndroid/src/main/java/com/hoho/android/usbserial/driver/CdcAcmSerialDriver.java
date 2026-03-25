@@ -34,6 +34,8 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
 
     public static final int USB_SUBCLASS_ACM = 2;
 
+    public static final UsbSerialDriver.Factory FACTORY = new CdcAcmFactory();
+
     private static final String TAG = CdcAcmSerialDriver.class.getSimpleName();
 
     private final UsbDevice mDevice;
@@ -49,11 +51,6 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
         if (mPorts.size() == 0) {
             mPorts.add(new CdcAcmSerialPort(mDevice, -1));
         }
-    }
-
-    @SuppressWarnings({"unused"})
-    public static boolean probe(UsbDevice device) {
-        return countPorts(device) > 0;
     }
 
     private static int countPorts(UsbDevice device) {
@@ -254,13 +251,8 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
             return -1;
         }
 
-        private int sendAcmControlMessage(int request, int value, byte[] buf) throws IOException {
-            int len = mConnection.controlTransfer(
-                    USB_RT_ACM, request, value, mControlIndex, buf, buf != null ? buf.length : 0, 5000);
-            if(len < 0) {
-                throw new IOException("controlTransfer failed");
-            }
-            return len;
+        private void sendAcmControlMessage(int request, int value, byte[] buf) throws IOException {
+            controlTransferOut(USB_RT_ACM, request, value, mControlIndex, buf, 5000);
         }
 
         @Override
@@ -270,7 +262,9 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
                 if (mDataInterface != mControlInterface) {
                     mConnection.releaseInterface(mDataInterface);
                 }
-            } catch(Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interfaces", e);
+            }
         }
 
         @Override
@@ -356,9 +350,21 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
 
     }
 
-    @SuppressWarnings({"unused"})
-    public static Map<Integer, int[]> getSupportedDevices() {
-        return new LinkedHashMap<>();
+    static class CdcAcmFactory implements UsbSerialDriver.Factory, UsbSerialDriver.DeviceProbe {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new CdcAcmSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            return new LinkedHashMap<>();
+        }
+
+        @Override
+        public boolean probe(UsbDevice device) {
+            return countPorts(device) > 0;
+        }
     }
 
 }

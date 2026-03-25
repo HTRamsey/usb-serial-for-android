@@ -190,7 +190,9 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
             if (!ok) {
                 try {
                     close();
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Error closing port after failed open", e);
+                }
             }
         }
     }
@@ -213,10 +215,14 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
         }
         try {
             closeInt();
-        } catch(Exception ignored) {}
+        } catch(Exception e) {
+            Log.w(TAG, "Error during driver close", e);
+        }
         try {
             mConnection.close();
-        } catch(Exception ignored) {}
+        } catch(Exception e) {
+            Log.w(TAG, "Error closing USB connection", e);
+        }
         mConnection = null;
     }
 
@@ -224,11 +230,15 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
         if (request == null) return;
         try {
             request.cancel();
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Error cancelling USB request", e);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 request.close();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error closing USB request", e);
+            }
         }
     }
 
@@ -251,7 +261,7 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
         byte[] buf = new byte[2];
         int len = mConnection.controlTransfer(0x80 /*DEVICE*/, 0 /*GET_STATUS*/, 0, 0, buf, buf.length, 200);
         if(len < 0)
-            throw new IOException(msg);
+            throw new IOException(msg + ", rc=" + len);
     }
 
     @Override
@@ -427,6 +437,48 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
     @Override
     public boolean isOpen() {
         return mReadRequest != null;
+    }
+
+    /**
+     * Performs an outgoing (host-to-device) USB control transfer with error checking.
+     *
+     * @param requestType the request type bitmask
+     * @param request the request ID
+     * @param value the value field
+     * @param index the index field
+     * @param data optional data buffer to send
+     * @param timeout timeout in milliseconds
+     * @throws IOException if the transfer fails or returns an unexpected length
+     */
+    protected void controlTransferOut(int requestType, int request, int value, int index, byte[] data, int timeout) throws IOException {
+        int length = (data != null) ? data.length : 0;
+        int result = mConnection.controlTransfer(requestType, request, value, index, data, length, timeout);
+        if (result != length) {
+            throw new IOException(String.format("controlTransfer out (0x%02x, 0x%02x, 0x%04x, 0x%04x) failed: rc=%d",
+                    requestType, request, value, index, result));
+        }
+    }
+
+    /**
+     * Performs an incoming (device-to-host) USB control transfer with error checking.
+     *
+     * @param requestType the request type bitmask
+     * @param request the request ID
+     * @param value the value field
+     * @param index the index field
+     * @param length expected response length
+     * @param timeout timeout in milliseconds
+     * @return the response buffer
+     * @throws IOException if the transfer fails or returns fewer bytes than expected
+     */
+    protected byte[] controlTransferIn(int requestType, int request, int value, int index, int length, int timeout) throws IOException {
+        byte[] buffer = new byte[length];
+        int result = mConnection.controlTransfer(requestType, request, value, index, buffer, length, timeout);
+        if (result != length) {
+            throw new IOException(String.format("controlTransfer in (0x%02x, 0x%02x, 0x%04x, 0x%04x) requested %d bytes, got %d",
+                    requestType, request, value, index, length, result));
+        }
+        return buffer;
     }
 
     @Override

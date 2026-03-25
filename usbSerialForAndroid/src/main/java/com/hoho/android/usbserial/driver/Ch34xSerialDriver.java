@@ -22,6 +22,8 @@ import java.util.Map;
 
 public class Ch34xSerialDriver implements UsbSerialDriver {
 
+    public static final UsbSerialDriver.Factory FACTORY = new Ch34xFactory();
+
     private static final String TAG = Ch34xSerialDriver.class.getSimpleName();
 
     private final UsbDevice mDevice;
@@ -108,40 +110,29 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
             try {
                 for (int i = 0; i < mDevice.getInterfaceCount(); i++)
                     mConnection.releaseInterface(mDevice.getInterface(i));
-            } catch(Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing interfaces", e);
+            }
         }
 
-        private int controlOut(int request, int value, int index) {
-            final int REQTYPE_HOST_TO_DEVICE = UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT;
-            return mConnection.controlTransfer(REQTYPE_HOST_TO_DEVICE, request,
-                    value, index, null, 0, USB_TIMEOUT_MILLIS);
+        private static final int REQTYPE_HOST_TO_DEVICE = UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT;
+        private static final int REQTYPE_DEVICE_TO_HOST = UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_IN;
+
+        private void controlOut(int request, int value, int index) throws IOException {
+            controlTransferOut(REQTYPE_HOST_TO_DEVICE, request, value, index, null, USB_TIMEOUT_MILLIS);
         }
 
-
-        private int controlIn(int request, int value, int index, byte[] buffer) {
-            final int REQTYPE_DEVICE_TO_HOST = UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_IN;
-            return mConnection.controlTransfer(REQTYPE_DEVICE_TO_HOST, request,
-                    value, index, buffer, buffer.length, USB_TIMEOUT_MILLIS);
+        private byte[] controlIn(int request, int value, int index, int length) throws IOException {
+            return controlTransferIn(REQTYPE_DEVICE_TO_HOST, request, value, index, length, USB_TIMEOUT_MILLIS);
         }
 
 
         private void checkState(String msg, int request, int value, int[] expected) throws IOException {
-            byte[] buffer = new byte[expected.length];
-            int ret = controlIn(request, value, 0, buffer);
-
-            if (ret < 0) {
-                throw new IOException("Failed send cmd [" + msg + "]");
-            }
-
-            if (ret != expected.length) {
-                throw new IOException("Expected " + expected.length + " bytes, but get " + ret + " [" + msg + "]");
-            }
-
+            byte[] buffer = controlIn(request, value, 0, expected.length);
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] == -1) {
                     continue;
                 }
-
                 int current = buffer[i] & 0xff;
                 if (expected[i] != current) {
                     throw new IOException("Expected 0x" + Integer.toHexString(expected[i]) + " byte, but get 0x" + Integer.toHexString(current) + " [" + msg + "]");
@@ -150,44 +141,24 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
         }
 
         private void setControlLines() throws IOException {
-            if (controlOut(0xa4, ~((dtr ? SCL_DTR : 0) | (rts ? SCL_RTS : 0)), 0) < 0) {
-                throw new IOException("Failed to set control lines");
-            }
+            controlOut(0xa4, ~((dtr ? SCL_DTR : 0) | (rts ? SCL_RTS : 0)), 0);
         }
 
         private byte getStatus() throws IOException {
-            byte[] buffer = new byte[2];
-            int ret = controlIn(0x95, 0x0706, 0, buffer);
-            if (ret < 0)
-                throw new IOException("Error getting control lines");
+            byte[] buffer = controlIn(0x95, 0x0706, 0, 2);
             return buffer[0];
         }
 
         private void initialize() throws IOException {
             checkState("init #1", 0x5f, 0, new int[]{-1 /* 0x27, 0x30 */, 0x00});
-
-            if (controlOut(0xa1, 0, 0) < 0) {
-                throw new IOException("Init failed: #2");
-            }
-
+            controlOut(0xa1, 0, 0);
             setBaudRate(DEFAULT_BAUD_RATE);
-
             checkState("init #4", 0x95, 0x2518, new int[]{-1 /* 0x56, c3*/, 0x00});
-
-            if (controlOut(0x9a, 0x2518, LCR_ENABLE_RX | LCR_ENABLE_TX | LCR_CS8) < 0) {
-                throw new IOException("Init failed: #5");
-            }
-
+            controlOut(0x9a, 0x2518, LCR_ENABLE_RX | LCR_ENABLE_TX | LCR_CS8);
             checkState("init #6", 0x95, 0x0706, new int[]{-1/*0xf?*/, -1/*0xec,0xee*/});
-
-            if (controlOut(0xa1, 0x501f, 0xd90a) < 0) {
-                throw new IOException("Init failed: #7");
-            }
-
+            controlOut(0xa1, 0x501f, 0xd90a);
             setBaudRate(DEFAULT_BAUD_RATE);
-
             setControlLines();
-
             checkState("init #10", 0x95, 0x0706, new int[]{-1/* 0x9f, 0xff*/, -1/*0xec,0xee*/});
         }
 
@@ -221,14 +192,8 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
             int val1 = (int) ((factor & 0xff00) | divisor);
             int val2 = (int) (factor & 0xff);
             Log.d(TAG, String.format("baud rate=%d, 0x1312=0x%04x, 0x0f2c=0x%04x", baudRate, val1, val2));
-            int ret = controlOut(0x9a, 0x1312, val1);
-            if (ret < 0) {
-                throw new IOException("Error setting baud rate: #1)");
-            }
-            ret = controlOut(0x9a, 0x0f2c, val2);
-            if (ret < 0) {
-                throw new IOException("Error setting baud rate: #2");
-            }
+            controlOut(0x9a, 0x1312, val1);
+            controlOut(0x9a, 0x0f2c, val2);
         }
 
         @Override
@@ -288,10 +253,7 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
                     throw new IllegalArgumentException("Invalid stop bits: " + stopBits);
             }
 
-            int ret = controlOut(0x9a, 0x2518, lcr);
-            if (ret < 0) {
-                throw new IOException("Error setting control byte");
-            }
+            controlOut(0x9a, 0x2518, lcr);
         }
 
         @Override
@@ -356,10 +318,7 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
 
         @Override
         public void setBreak(boolean value) throws IOException {
-            byte[] req = new byte[2];
-            if(controlIn(0x95, 0x1805, 0, req) < 0) {
-                throw new IOException("Error getting BREAK condition");
-            }
+            byte[] req = controlIn(0x95, 0x1805, 0, 2);
             if(value) {
                 req[0] &= ~1;
                 req[1] &= ~0x40;
@@ -368,20 +327,25 @@ public class Ch34xSerialDriver implements UsbSerialDriver {
                 req[1] |= 0x40;
             }
             int val = (req[1] & 0xff) << 8 | (req[0] & 0xff);
-            if(controlOut(0x9a, 0x1805, val) < 0) {
-                throw new IOException("Error setting BREAK condition");
-            }
+            controlOut(0x9a, 0x1805, val);
         }
     }
 
-    @SuppressWarnings({"unused"})
-    public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
-        supportedDevices.put(UsbId.VENDOR_QINHENG, new int[]{
-                UsbId.QINHENG_CH340,
-                UsbId.QINHENG_CH341A,
-        });
-        return supportedDevices;
+    static class Ch34xFactory implements UsbSerialDriver.Factory {
+        @Override
+        public UsbSerialDriver create(UsbDevice device) {
+            return new Ch34xSerialDriver(device);
+        }
+
+        @Override
+        public Map<Integer, int[]> getSupportedDevices() {
+            final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
+            supportedDevices.put(UsbId.VENDOR_QINHENG, new int[]{
+                    UsbId.QINHENG_CH340,
+                    UsbId.QINHENG_CH341A,
+            });
+            return supportedDevices;
+        }
     }
 
 }

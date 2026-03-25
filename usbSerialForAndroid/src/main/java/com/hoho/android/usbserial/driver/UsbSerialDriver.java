@@ -9,17 +9,25 @@ package com.hoho.android.usbserial.driver;
 import android.hardware.usb.UsbDevice;
 
 import java.util.List;
+import java.util.Map;
 
 public interface UsbSerialDriver {
 
-    /*
-     * Additional interface properties. Invoked thru reflection.
-     *
-        UsbSerialDriver(UsbDevice device);                  // constructor with device
-        static Map<Integer, int[]> getSupportedDevices();
-        static boolean probe(UsbDevice device);             // optional
+    /**
+     * Factory for creating driver instances from a USB device.
      */
+    interface Factory {
+        UsbSerialDriver create(UsbDevice device);
+        Map<Integer, int[]> getSupportedDevices();
+    }
 
+    /**
+     * Optional interface for drivers that can probe USB devices by inspecting
+     * their interfaces, beyond simple VID/PID matching.
+     */
+    interface DeviceProbe {
+        boolean probe(UsbDevice device);
+    }
 
     /**
      * Returns the raw {@link UsbDevice} backing this port.

@@ -17,6 +17,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.nio.ByteBuffer;
 import java.util.EnumSet;
 
 /**
@@ -181,6 +182,25 @@ public interface UsbSerialPort extends Closeable {
      * @throws IOException if an error occurred during writing
      */
     void write(final byte[] src, int length, final int timeout) throws IOException;
+
+    /**
+     * Reads as many bytes as possible into the destination ByteBuffer.
+     *
+     * @param dest the destination ByteBuffer
+     * @param timeout the timeout for reading in milliseconds, 0 is infinite
+     * @return the actual number of bytes read
+     * @throws IOException if an error occurred during reading
+     */
+    int read(final ByteBuffer dest, final int timeout) throws IOException;
+
+    /**
+     * Writes as many bytes as possible from the source ByteBuffer.
+     *
+     * @param src the source ByteBuffer
+     * @param timeout the timeout for writing in milliseconds, 0 is infinite
+     * @throws IOException if an error occurred during writing
+     */
+    void write(final ByteBuffer src, final int timeout) throws IOException;
 
     /**
      * Sets various serial port parameters.

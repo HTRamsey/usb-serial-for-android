@@ -1,14 +1,9 @@
 package com.hoho.android.usbserial.examples;
 
-import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -28,7 +23,6 @@ import android.widget.ToggleButton;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
@@ -36,6 +30,7 @@ import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.driver.UsbSerialProber;
 import com.hoho.android.usbserial.util.HexDump;
 import com.hoho.android.usbserial.util.SerialInputOutputManager;
+import com.hoho.android.usbserial.util.UsbPermission;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -43,36 +38,24 @@ import java.util.EnumSet;
 
 public class TerminalFragment extends Fragment implements SerialInputOutputManager.Listener {
 
-    private enum UsbPermission { Unknown, Requested, Granted, Denied }
+    private enum PermissionState { Unknown, Requested, Granted, Denied }
 
-    private static final String INTENT_ACTION_GRANT_USB = BuildConfig.APPLICATION_ID + ".GRANT_USB";
     private static final int WRITE_WAIT_MILLIS = 2000;
     private static final int READ_WAIT_MILLIS = 2000;
 
     private int deviceId, portNum, baudRate;
     private boolean withIoManager;
 
-    private final BroadcastReceiver broadcastReceiver;
     private final Handler mainLooper;
     private TextView receiveText;
     private ControlLines controlLines;
 
     private SerialInputOutputManager usbIoManager;
     private UsbSerialPort usbSerialPort;
-    private UsbPermission usbPermission = UsbPermission.Unknown;
+    private PermissionState permissionState = PermissionState.Unknown;
     private boolean connected = false;
 
     public TerminalFragment() {
-        broadcastReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if(INTENT_ACTION_GRANT_USB.equals(intent.getAction())) {
-                    usbPermission = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                            ? UsbPermission.Granted : UsbPermission.Denied;
-                    connect();
-                }
-            }
-        };
         mainLooper = new Handler(Looper.getMainLooper());
     }
 
@@ -91,21 +74,9 @@ public class TerminalFragment extends Fragment implements SerialInputOutputManag
     }
 
     @Override
-    public void onStart() {
-        super.onStart();
-        ContextCompat.registerReceiver(getActivity(), broadcastReceiver, new IntentFilter(INTENT_ACTION_GRANT_USB), ContextCompat.RECEIVER_NOT_EXPORTED);
-    }
-
-    @Override
-    public void onStop() {
-        getActivity().unregisterReceiver(broadcastReceiver);
-        super.onStop();
-    }
-
-    @Override
     public void onResume() {
         super.onResume();
-        if(!connected && (usbPermission == UsbPermission.Unknown || usbPermission == UsbPermission.Granted))
+        if(!connected && (permissionState == PermissionState.Unknown || permissionState == PermissionState.Granted))
             mainLooper.post(this::connect);
     }
 
@@ -219,16 +190,21 @@ public class TerminalFragment extends Fragment implements SerialInputOutputManag
             return;
         }
         usbSerialPort = driver.getPorts().get(portNum);
-        UsbDeviceConnection usbConnection = usbManager.openDevice(driver.getDevice());
-        if(usbConnection == null && usbPermission == UsbPermission.Unknown && !usbManager.hasPermission(driver.getDevice())) {
-            usbPermission = UsbPermission.Requested;
-            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_MUTABLE : 0;
-            Intent intent = new Intent(INTENT_ACTION_GRANT_USB);
-            intent.setPackage(getActivity().getPackageName());
-            PendingIntent usbPermissionIntent = PendingIntent.getBroadcast(getActivity(), 0, intent, flags);
-            usbManager.requestPermission(driver.getDevice(), usbPermissionIntent);
+        if(permissionState == PermissionState.Unknown && !usbManager.hasPermission(driver.getDevice())) {
+            permissionState = PermissionState.Requested;
+            UsbPermission.request(getActivity(), driver.getDevice(), (connection, granted) -> {
+                mainLooper.post(() -> {
+                    permissionState = granted ? PermissionState.Granted : PermissionState.Denied;
+                    if (granted && connection != null) {
+                        openPort(connection);
+                    } else {
+                        status("connection failed: permission denied");
+                    }
+                });
+            });
             return;
         }
+        UsbDeviceConnection usbConnection = usbManager.openDevice(driver.getDevice());
         if(usbConnection == null) {
             if (!usbManager.hasPermission(driver.getDevice()))
                 status("connection failed: permission denied");
@@ -236,16 +212,20 @@ public class TerminalFragment extends Fragment implements SerialInputOutputManag
                 status("connection failed: open failed");
             return;
         }
+        openPort(usbConnection);
+    }
 
+    private void openPort(UsbDeviceConnection usbConnection) {
         try {
             usbSerialPort.open(usbConnection);
-            try{
+            try {
                 usbSerialPort.setParameters(baudRate, 8, 1, UsbSerialPort.PARITY_NONE);
-            }catch (UnsupportedOperationException e){
+            } catch (UnsupportedOperationException e) {
                 status("unsupport setparameters");
             }
             if(withIoManager) {
                 usbIoManager = new SerialInputOutputManager(usbSerialPort, this);
+                usbIoManager.bindTo(getViewLifecycleOwner());
                 usbIoManager.start();
             }
             status("connected");

@@ -9,11 +9,19 @@ package com.hoho.android.usbserial.util;
 import android.os.Process;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
+import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
+
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.EnumSet;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -21,7 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * @author mike wakerly (opensource@hoho.com)
  */
-public class SerialInputOutputManager {
+public class SerialInputOutputManager implements Closeable, DefaultLifecycleObserver {
 
     public enum State {
         STOPPED,
@@ -30,7 +38,7 @@ public class SerialInputOutputManager {
         STOPPING
     }
 
-    public static boolean DEBUG = false;
+    public static volatile boolean DEBUG = false;
 
     private static final String TAG = SerialInputOutputManager.class.getSimpleName();
     private static final int WRITE_BUFFER_SIZE = 4096;
@@ -49,7 +57,11 @@ public class SerialInputOutputManager {
     private int mThreadPriority = Process.THREAD_PRIORITY_URGENT_AUDIO;
     private final AtomicReference<State> mState = new AtomicReference<>(State.STOPPED);
     private volatile CountDownLatch mStartuplatch = new CountDownLatch(2);
-    private Listener mListener; // Synchronized by 'this'
+    private volatile Listener mListener;
+    private volatile ControlLineListener mControlLineListener;
+    private volatile int mControlLinePollingInterval = 200;
+    private long mLastControlLineCheck = 0;
+    private EnumSet<UsbSerialPort.ControlLine> mLastControlLines;
     private final UsbSerialPort mSerialPort;
 
     public interface Listener {
@@ -64,6 +76,10 @@ public class SerialInputOutputManager {
         void onRunError(Exception e);
     }
 
+    public interface ControlLineListener {
+        void onControlLinesChanged(EnumSet<UsbSerialPort.ControlLine> controlLines);
+    }
+
     public SerialInputOutputManager(UsbSerialPort serialPort) {
         mSerialPort = serialPort;
         mReadBuffer = ByteBuffer.allocate(serialPort.getReadEndpoint().getMaxPacketSize());
@@ -74,12 +90,31 @@ public class SerialInputOutputManager {
         mListener = listener;
     }
 
-    public synchronized void setListener(Listener listener) {
+    public void setListener(Listener listener) {
         mListener = listener;
     }
 
-    public synchronized Listener getListener() {
+    public Listener getListener() {
         return mListener;
+    }
+
+    /**
+     * Set a listener to be notified when control lines (CTS, DSR, etc.) change.
+     * Polling occurs on the read thread at the configured interval.
+     *
+     * @param listener the listener, or null to disable
+     */
+    public void setControlLineListener(ControlLineListener listener) {
+        mControlLineListener = listener;
+    }
+
+    /**
+     * @param listener the listener, or null to disable
+     * @param pollingIntervalMs how often to poll control lines, in milliseconds
+     */
+    public void setControlLineListener(ControlLineListener listener, int pollingIntervalMs) {
+        mControlLineListener = listener;
+        mControlLinePollingInterval = pollingIntervalMs;
     }
 
     /**
@@ -161,12 +196,28 @@ public class SerialInputOutputManager {
     public int getReadQueueBufferCount() { return mReadQueueBufferCount; }
 
     /**
-     * write data asynchronously
+     * Write data asynchronously. Blocks if the write buffer is full until
+     * space becomes available or the manager stops.
      */
     public void writeAsync(byte[] data) {
         synchronized (mWriteBufferLock) {
+            if (data.length > mWriteBuffer.capacity()) {
+                throw new IllegalArgumentException("data length " + data.length
+                        + " exceeds write buffer capacity " + mWriteBuffer.capacity());
+            }
+            while (mWriteBuffer.remaining() < data.length) {
+                if (getState() != State.RUNNING && getState() != State.STARTING) {
+                    throw new IllegalStateException("not running");
+                }
+                try {
+                    mWriteBufferLock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
             mWriteBuffer.put(data);
-            mWriteBufferLock.notifyAll(); // Notify waiting threads
+            mWriteBufferLock.notifyAll();
         }
     }
 
@@ -180,7 +231,10 @@ public class SerialInputOutputManager {
             new Thread(this::runRead, this.getClass().getSimpleName() + "_read").start();
             new Thread(this::runWrite, this.getClass().getSimpleName() + "_write").start();
             try {
-                mStartuplatch.await();
+                if (!mStartuplatch.await(5, TimeUnit.SECONDS)) {
+                    mState.set(State.STOPPED);
+                    throw new IllegalStateException("Timeout waiting for I/O threads to start");
+                }
                 mState.set(State.RUNNING);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -208,6 +262,29 @@ public class SerialInputOutputManager {
             }
             Log.i(TAG, "Stop requested");
         }
+    }
+
+    @Override
+    public void close() {
+        stop();
+    }
+
+    /**
+     * Bind this manager to a {@link LifecycleOwner} so that it automatically
+     * stops when the lifecycle reaches {@link Lifecycle.State#DESTROYED}.
+     *
+     * @param owner the lifecycle owner (e.g. Activity or Fragment)
+     * @return this manager for chaining
+     */
+    public SerialInputOutputManager bindTo(LifecycleOwner owner) {
+        owner.getLifecycle().addObserver(this);
+        return this;
+    }
+
+    @Override
+    public void onDestroy(@NonNull LifecycleOwner owner) {
+        stop();
+        owner.getLifecycle().removeObserver(this);
     }
 
     public State getState() {
@@ -259,6 +336,7 @@ public class SerialInputOutputManager {
             mStartuplatch.countDown();
             do {
                 stepRead();
+                pollControlLines();
             } while (isStillRunning());
             Log.i(TAG, "runRead: Stopping mState=" + getState());
         } catch (Throwable e) {
@@ -329,6 +407,22 @@ public class SerialInputOutputManager {
                 System.arraycopy(buffer, 0, data, 0, len);
                 listener.onNewData(data);
             }
+        }
+    }
+
+    private void pollControlLines() {
+        ControlLineListener listener = mControlLineListener;
+        if (listener == null) return;
+        long now = MonotonicClock.millis();
+        if (now - mLastControlLineCheck < mControlLinePollingInterval) return;
+        mLastControlLineCheck = now;
+        try {
+            EnumSet<UsbSerialPort.ControlLine> current = mSerialPort.getControlLines();
+            if (!current.equals(mLastControlLines)) {
+                mLastControlLines = current;
+                listener.onControlLinesChanged(current);
+            }
+        } catch (Exception ignored) {
         }
     }
 

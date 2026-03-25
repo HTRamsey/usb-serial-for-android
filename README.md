@@ -10,6 +10,8 @@ Android, using the
 [Android USB Host Mode (OTG)](http://developer.android.com/guide/topics/connectivity/usb/host.html)
 available since Android 3.1 and working reliably since Android 4.2.
 
+Requires **minSdk 21** (Android 5.0).
+
 No root access, ADK, or special kernel drivers are required; all drivers are implemented in
 Java.  You get a raw serial port with `read()`, `write()`, and [other functions](https://github.com/mik3y/usb-serial-for-android/wiki/FAQ#Feature_Matrix) for use with your own protocols.
 
@@ -109,6 +111,63 @@ public void onNewData(byte[] data) {
 and finally:
 ```java
     port.close();
+```
+
+### USB Permission Helper
+
+Simplify the USB permission flow:
+```java
+UsbPermission.request(context, device, (connection, granted) -> {
+    if (granted) {
+        port.open(connection);
+        port.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+    }
+});
+```
+
+### ByteBuffer API
+
+Read and write using `ByteBuffer` for zero-copy integration with NIO-based protocols:
+```java
+    ByteBuffer buf = ByteBuffer.allocate(1024);
+    int n = port.read(buf, timeout);
+    buf.flip();
+```
+
+### InputStream / OutputStream
+
+Standard Java stream wrappers for compatibility with protocol libraries:
+```java
+    SerialInputStream in = new SerialInputStream(port, READ_TIMEOUT);
+    SerialOutputStream out = new SerialOutputStream(port, WRITE_TIMEOUT);
+    // use with any library that expects standard streams
+```
+
+### Lifecycle-Aware I/O Manager
+
+Bind the `SerialInputOutputManager` to an Activity or Fragment lifecycle to auto-stop
+on destroy and prevent thread leaks:
+```java
+    usbIoManager = new SerialInputOutputManager(port, listener);
+    usbIoManager.bindTo(this); // 'this' is a LifecycleOwner
+    usbIoManager.start();
+    // automatically stopped when the lifecycle is destroyed
+```
+
+### Control Line Monitoring
+
+Poll control line changes (CTS, DSR, CD, RI) on the I/O manager's read thread:
+```java
+    usbIoManager.setControlLineListener(controlLines -> {
+        boolean cts = controlLines.contains(UsbSerialPort.ControlLine.CTS);
+    }, 200); // poll interval in ms
+```
+
+### Read Queue
+
+Reduce data loss at high baud rates with multi-buffer read queue:
+```java
+    port.setReadQueue(4, 0); // 4 buffers, 0 = optimal size
 ```
 
 For a simple example, see

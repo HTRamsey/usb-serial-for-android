@@ -396,6 +396,35 @@ public abstract class CommonUsbSerialPort implements UsbSerialPort {
     }
 
     @Override
+    public int read(final ByteBuffer dest, final int timeout) throws IOException {
+        if (dest.hasArray() && dest.arrayOffset() == 0 && dest.position() == 0) {
+            int nread = read(dest.array(), dest.remaining(), timeout);
+            if (nread > 0) {
+                dest.position(nread);
+            }
+            return nread;
+        }
+        byte[] buf = new byte[dest.remaining()];
+        int nread = read(buf, timeout);
+        if (nread > 0) {
+            dest.put(buf, 0, nread);
+        }
+        return nread;
+    }
+
+    @Override
+    public void write(final ByteBuffer src, final int timeout) throws IOException {
+        if (src.hasArray() && src.arrayOffset() == 0 && src.position() == 0) {
+            write(src.array(), src.remaining(), timeout);
+            src.position(src.limit());
+            return;
+        }
+        byte[] buf = new byte[src.remaining()];
+        src.get(buf);
+        write(buf, timeout);
+    }
+
+    @Override
     public boolean isOpen() {
         return mReadRequest != null;
     }
